@@ -1,0 +1,23 @@
+# https://taskfile.dev
+
+version: '3'
+
+vars:
+  MODULE: build-capture
+
+tasks:
+  default:
+    cmds:
+      - echo "{{.MODULE}}"
+    silent: true
+
+  remod:
+    cmds:
+      - rm -vf go.*
+      - go mod init "{{.MODULE}}"
+      - go mod tidy
+      - go clean .
+
+  build:
+    cmds:
+      - go build .

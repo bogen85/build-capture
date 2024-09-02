@@ -15,6 +15,40 @@ import (
 	"github.com/rivo/tview"
 )
 
+// FuncQ structure to hold functions
+type FuncQ struct {
+	funcs []func()
+}
+
+func NewFuncQ() *FuncQ {
+	return &FuncQ{}
+}
+
+// add adds a function to the end of the queue
+func (q *FuncQ) Add(f func()) {
+	q.funcs = append(q.funcs, f)
+}
+
+// dequeue removes and returns the function at the front of the queue
+func (q *FuncQ) Dequeue() func() {
+	if len(q.funcs) == 0 {
+		return nil // or handle underflow as needed
+	}
+	f := q.funcs[0]
+	q.funcs = q.funcs[1:] // remove the first element
+	return f
+}
+
+// Execute runs all functions in the queue in FIFO order
+func (q *FuncQ) Execute() {
+	for len(q.funcs) > 0 {
+		f := q.Dequeue()
+		if f != nil {
+			f() // call the function
+		}
+	}
+}
+
 type buildCapture struct {
 	app        *tview.Application
 	cmd        *exec.Cmd
@@ -29,6 +63,7 @@ type buildCapture struct {
 	update     func()
 	changed    func(idx int, _mt string, _st string, _sc rune)
 	errors     int
+	failed     bool
 }
 
 func newBuildCapture(command string, args []string) *buildCapture {
@@ -43,6 +78,7 @@ func newBuildCapture(command string, args []string) *buildCapture {
 		flex:       tview.NewFlex(),
 		killChan:   make(chan struct{}),
 		errors:     0,
+		failed:     false,
 	}
 
 	bc.changed = func(idx int, _mt string, _st string, _sc rune) {
@@ -106,7 +142,13 @@ func (bc *buildCapture) append(format string, args ...interface{}) {
 
 func (bc *buildCapture) appendError(format string, args ...interface{}) {
 	bc.errors++
-	bc.errorCount.SetText(fmt.Sprintf("[red]([yellow]%d[red])[white]", bc.errors))
+	status := func() string {
+		if bc.failed {
+			return "[red]FAIL"
+		}
+		return "[green]PASS"
+	}()
+	bc.errorCount.SetText(fmt.Sprintf("[red]([yellow]%d[red]) %s[white]", bc.errors, status))
 	bc.append0(true, format, args...)
 }
 
@@ -174,12 +216,14 @@ func (bc *buildCapture) start() int {
 		chStderr <- struct{}{}
 	}()
 
+	errq := NewFuncQ()
+
 	primary := func() bool {
 		select {
 		case <-bc.killChan:
-			bc.appendError("Process was killed by user")
+			errq.Add(func() { bc.appendError("Process was killed by user") })
 			if err := bc.cmd.Process.Kill(); err != nil {
-				bc.appendError("Error killing process: %s", err)
+				errq.Add(func() { bc.appendError("Error killing process: %s", err) })
 				return true
 			}
 			bc.cmd.Wait()
@@ -192,7 +236,7 @@ func (bc *buildCapture) start() int {
 	go func() {
 		killed := primary()
 		if !killed && !bc.cmd.ProcessState.Success() {
-			bc.appendError("Command failed: rc = %d", bc.cmd.ProcessState.ExitCode())
+			errq.Add(func() { bc.appendError("Command failed: rc = %d", bc.cmd.ProcessState.ExitCode()) })
 		}
 		chPrimary <- struct{}{}
 	}()
@@ -204,6 +248,7 @@ func (bc *buildCapture) start() int {
 		case <-chStderr:
 		}
 	}
+	errq.Execute()
 	return bc.cmd.ProcessState.ExitCode()
 }
 
@@ -255,6 +300,7 @@ func main() {
 		finished = true
 		bc.caption.SetLabel("(completed) Press 'q' to exit")
 		if rc != 0 {
+			bc.failed = true
 			bc.appendError("Fail: %s %s", bc.cmd.Path, strings.Join(bc.cmd.Args, " "))
 		}
 		bc.app.Draw()
