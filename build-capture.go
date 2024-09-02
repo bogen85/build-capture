@@ -30,13 +30,14 @@ func (q *FuncQ) Add(f func()) {
 }
 
 // dequeue removes and returns the function at the front of the queue
-func (q *FuncQ) Dequeue() func() {
+func (q *FuncQ) Dequeue() (f func()) {
+	f = nil
 	if len(q.funcs) == 0 {
-		return nil // or handle underflow as needed
+		return
 	}
-	f := q.funcs[0]
+	f = q.funcs[0]
 	q.funcs = q.funcs[1:] // remove the first element
-	return f
+	return
 }
 
 // Execute runs all functions in the queue in FIFO order
@@ -173,6 +174,9 @@ func (bc *buildCapture) run() {
 
 func (bc *buildCapture) start() int {
 
+	errq := NewFuncQ()
+	defer errq.Execute()
+
 	chPrimary := make(chan struct{})
 	chStderr := make(chan struct{})
 	chStdout := make(chan struct{})
@@ -216,8 +220,6 @@ func (bc *buildCapture) start() int {
 		chStderr <- struct{}{}
 	}()
 
-	errq := NewFuncQ()
-
 	primary := func() bool {
 		select {
 		case <-bc.killChan:
@@ -248,7 +250,7 @@ func (bc *buildCapture) start() int {
 		case <-chStderr:
 		}
 	}
-	errq.Execute()
+
 	return bc.cmd.ProcessState.ExitCode()
 }
 
